@@ -1,3 +1,4 @@
+#include <iterator>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <thrust/generate.h>
@@ -9,7 +10,7 @@
 #include <charconv>
 #include <format>
 #include <ranges>
-
+#include <concepts>
 
 
 void usage(const char* filename)
@@ -39,9 +40,9 @@ public:
 };
 
 using dev_vec_it 		= thrust::device_vector<el_type>::iterator;
-
 using vector_input_it	= std::vector<std::string_view>::iterator;
-template<typename... Args>
+
+template<... Args>
 std::tuple<Args...> validate_input_parameters(vector_input_it begin, vector_input_it end){
 	bool is_valid{};
 	
@@ -120,7 +121,7 @@ int main(int argc, char* argv[])
 	if (n <= PRINTABLE_BUFF_SIZE)
 	{
 		std::cout << "OUTPUT DATA: \n";
-		for(auto [el_x, el_y, el_z]: std::ranges::zip_view(host_x, host_y, host_z)){
+		for(auto [el_x, el_y, el_z]: thrust::make_zip_iterator(thrust::make_tuple(host_x, host_y, host_z))){
 			std::println(std::cout, "\t{} * {} + {} = {}", a, el_x, el_y, el_z);
 		}
 	}
