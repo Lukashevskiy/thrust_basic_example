@@ -1,18 +1,18 @@
-// #include <iterator>
-// #include <thrust/host_vector.h>
-// #include <thrust/device_vector.h>
-// #include <thrust/generate.h>
-// #include <thrust/iterator/detail/zip_iterator.inl>
-// #include <thrust/transform.h>
+#include <iterator>
+#include <random>
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/generate.h>
+#include <thrust/iterator/detail/zip_iterator.inl>
+#include <thrust/transform.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_device_runtime_api.h>
 #include <string_view>
-#include <vector>
 #include <cstdlib>
 #include <charconv>
-
-
+// #include <format>
+// #include <print>
 void usage(const char* filename)
 {
 	printf("Calculating a saxpy transform for two random vectors of the given length.\n");
@@ -25,8 +25,8 @@ void usage(const char* filename)
 // TODO: Please refer to sorting examples:
 // http://code.google.com/p/thrust/
 // http://code.google.com/p/thrust/wiki/QuickStartGuide#Transformations
+
 using el_type = float;
-#if 0
 class saxpy_callable{
 private:
 	el_type a;
@@ -40,8 +40,7 @@ public:
 };
 
 using dev_vec_it 		= thrust::device_vector<el_type>::iterator;
-#endif
-using vector_input_it	= std::vector<std::string_view>::iterator;
+using vector_input_it	= thrust::host_vector<std::string_view>::iterator;
 
 template<typename... Args>
 std::tuple<Args...> validate_input_parameters(vector_input_it begin, vector_input_it end){
@@ -58,15 +57,17 @@ std::tuple<Args...> validate_input_parameters(vector_input_it begin, vector_inpu
 	std::from_chars(chars_start, chars_end, converted);
 	
 	is_valid &=  converted > 0;
-	usage(begin->data());
+	usage(begin.base()->begin());
 
 	return std::make_tuple(is_valid, converted);
 }
 
-int main(int argc, char* argv[])
+
+__host__ int main(int argc, char* argv[])
 {
 	constexpr size_t PRINTABLE_SIZE = 128;
-	std::vector<std::string_view> input_arguments(argv, argv + argc);
+	// std::vector<std::string_view> input_arguments(argv, argv + argc);
+	thrust::host_vector<std::string_view> input_arguments{argv, argv+argc};
 	bool is_valid;
 	int n;
 	std::tie(is_valid, n) = validate_input_parameters<bool, int>(input_arguments.begin(),  input_arguments.end());
@@ -75,7 +76,6 @@ int main(int argc, char* argv[])
 		usage(argv[0]);
 		return 0;
 	}
-#if 0
 
 	cudaSetDevice(2);
 
@@ -97,11 +97,12 @@ int main(int argc, char* argv[])
 
 
 	// Print out the input data if n is small.
-	if (n <= PRINTABLE_BUFF_SIZE)
+	if (n <= PRINTABLE_SIZE)
 	{
 		printf("Input data:\n");
+		auto 
 		for(auto [el_x, el_y]: thrust::make_zip_iterator(host_x, host_y)){
-			println(std::cout, "\t{} \t{}", el_x, el_y);
+			// println(std::cout, "\t{} \t{}", el_x, el_y);
 		}
 	}
 
@@ -119,15 +120,17 @@ int main(int argc, char* argv[])
 	dev_z = host_z;
 
 	// Print out the output data if n is small.
-	if (n <= PRINTABLE_BUFF_SIZE)
-	{
+	if (n <= PRINTABLE_SIZE)
+	{	
+		auto itt = thrust::make_zip_iterator(host_x.begin(), host_y.begin(), host_z.begin());
 		std::cout << "OUTPUT DATA: \n";
-		for(auto [el_x, el_y, el_z]: thrust::make_zip_iterator(host_x, host_y, host_z)){
-			std::println(std::cout, "\t{} * {} + {} = {}", a, el_x, el_y, el_z);
+		for(auto itts: itt.get_iterator_tuple()){
+			// std::println(std::cout, "\t{} * {} + {} = {}", a, el_x, el_y, el_z);
+			// std::println(std::cout, "{}, {}", itts)
 		}
+		
 	}
 
-#endif
 	return 0;
 }
 
