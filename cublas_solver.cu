@@ -1,5 +1,3 @@
-// Low level matrix multiplication on GPU using CUDA with CURAND and CUBLAS
-// C(m,n) = A(m,k) * B(k,n)
 #include <iostream>
 #include <cstdlib>
 #include <ctime>
@@ -7,47 +5,50 @@
 #include <curand.h>
 #include "cublas_utils.h"
 
-
-
 // Fill the array A(nr_rows_A, nr_cols_A) with random numbers on GPU
 void GPU_fill_rand(float *A, int nr_rows_A, int nr_cols_A) {
-	// Create a pseudo-random number generator
-	curandGenerator_t prng;
-	curandCreateGenerator(&prng, CURAND_RNG_PSEUDO_DEFAULT);
+    // Create a pseudo-random number generator
+    curandGenerator_t prng;
+    curandCreateGenerator(&prng, CURAND_RNG_PSEUDO_DEFAULT);
 
-	// Set the seed for the random number generator using the system clock
-	curandSetPseudoRandomGeneratorSeed(prng, (unsigned long long) clock());
+    // Set the seed for the random number generator using the system clock
+    curandSetPseudoRandomGeneratorSeed(prng, (unsigned long long) clock());
 
-	// Fill the array with random numbers on the device
-	curandGenerateUniform(prng, A, nr_rows_A * nr_cols_A);
+    // Fill the array with random numbers on the device
+    curandGenerateUniform(prng, A, nr_rows_A * nr_cols_A);
 }
 
-// Multiply the arrays A and B on GPU and save the result in C
-// C(m,n) = A(m,k) * B(k,n)
-void gpu_blas_mmul(const float *A, const float *B, float *C, const int m, const int k, const int n) {
-	int lda{m},ldb{k},ldc{n};
-	const float alf = 1;
-	const float bet = 0;
-	const float *alpha = &alf;
-	const float *beta = &bet;
+// Solve SLAU Ax = B using LU decomposition
+void solve_slae(float *d_A, float *d_B, float *d_X, int n, int batch_size) {
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
 
-	// Create a handle for CUBLAS
-	cublasHandle_t handle;
-	CUBLAS_CHECK(cublasCreate(&handle));
+    int *d_P; // Pivot indices
+    int *d_info; // Info array for errors
+    CUDA_CHECK(cudaMalloc(&d_P, n * batch_size * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_info, batch_size * sizeof(int)));
 
-	// Do the actual multiplication
-	CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc));
+    // Perform LU decomposition
+    CUBLAS_CHECK(cublasSgetrfBatched(handle, n, &d_A, n, d_P, d_info, batch_size));
 
-	// Destroy the handle
-	CUBLAS_CHECK(cublasDestroy(handle));
+    // Solve the system using the LU factorization
+    const float **d_A_array = (const float **)&d_A; // Pointer to array of matrix pointers
+    float **d_B_array = &d_B;
+    CUBLAS_CHECK(cublasSgetrsBatched(handle, CUBLAS_OP_N, n, 1, d_A_array, n, d_P, d_B_array, n, d_info, batch_size));
+
+    // Copy result from d_B to d_X
+    CUDA_CHECK(cudaMemcpy(d_X, d_B, n * batch_size * sizeof(float), cudaMemcpyDeviceToDevice));
+
+    // Clean up
+    CUDA_CHECK(cudaFree(d_P));
+    CUDA_CHECK(cudaFree(d_info));
+    CUBLAS_CHECK(cublasDestroy(handle));
 }
 
-
-//Print matrix A(nr_rows_A, nr_cols_A) storage in column-major format
+// Print matrix A(nr_rows_A, nr_cols_A) stored in column-major format
 void print_matrix(const float *A, int nr_rows_A, int nr_cols_A) {
-
-    for(int i = 0; i < nr_rows_A; ++i){
-        for(int j = 0; j < nr_cols_A; ++j){
+    for (int i = 0; i < nr_rows_A; ++i) {
+        for (int j = 0; j < nr_cols_A; ++j) {
             std::cout << A[j * nr_rows_A + i] << " ";
         }
         std::cout << std::endl;
@@ -56,54 +57,54 @@ void print_matrix(const float *A, int nr_rows_A, int nr_cols_A) {
 }
 
 int main() {
-	// Allocate 3 arrays on CPU
-	int nr_rows_A{3}, nr_cols_A{3}, nr_rows_B{3}, nr_cols_B{3}, nr_rows_C{3}, nr_cols_C{3};
+    // Define matrix and vector dimensions
+    int n = 3; // Matrix size (n x n)
+    int batch_size = 1; // Number of matrices (batch size)
 
-	// for simplicity we are going to use square arrays
-	//nr_rows_A = nr_cols_A = nr_rows_B = nr_cols_B = nr_rows_C = nr_cols_C = 3;
-	
-	float *h_A = (float *)malloc(nr_rows_A * nr_cols_A * sizeof(float));
-	float *h_B = (float *)malloc(nr_rows_B * nr_cols_B * sizeof(float));
-	float *h_C = (float *)malloc(nr_rows_C * nr_cols_C * sizeof(float));
+    // Host memory allocation
+    float *h_A = (float *)malloc(n * n * sizeof(float));
+    float *h_B = (float *)malloc(n * sizeof(float)); // Right-hand side vector
+    float *h_X = (float *)malloc(n * sizeof(float)); // Solution vector
 
-	// Allocate 3 arrays on GPU
-	float  *d_A, *d_B, *d_C;
-	CUDA_CHECK(cudaMalloc(&d_A, nr_rows_A * nr_cols_A * sizeof(float)));
-	CUDA_CHECK(cudaMalloc(&d_B, nr_rows_B * nr_cols_B * sizeof(float)));
-	CUDA_CHECK(cudaMalloc(&d_C, nr_rows_C * nr_cols_C * sizeof(float)));
+    // Device memory allocation
+    float *d_A, *d_B, *d_X;
+    CUDA_CHECK(cudaMalloc(&d_A, n * n * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_B, n * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_X, n * sizeof(float)));
 
-	// If you already have useful values in A and B you can copy them in GPU:
-	cudaMemcpy(d_A,h_A,nr_rows_A * nr_cols_A * sizeof(float),cudaMemcpyHostToDevice);
-	cudaMemcpy(d_B,h_B,nr_rows_B * nr_cols_B * sizeof(float),cudaMemcpyHostToDevice);
+    // Initialize A and B
+    GPU_fill_rand(d_A, n, n);
+    GPU_fill_rand(d_B, n, 1);
 
-	// Fill the arrays A and B on GPU with random numbers
-	GPU_fill_rand(d_A, nr_rows_A, nr_cols_A);
-	GPU_fill_rand(d_B, nr_rows_B, nr_cols_B);
+    // Copy A and B to host for debugging
+    CUDA_CHECK(cudaMemcpy(h_A, d_A, n * n * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_B, d_B, n * sizeof(float), cudaMemcpyDeviceToHost));
 
-	CUDA_CHECK(cudaMemcpy(h_A,d_A,nr_rows_A * nr_cols_A * sizeof(float),cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_B,d_B,nr_rows_B * nr_cols_B * sizeof(float),cudaMemcpyDeviceToHost));
-	std::cout << "A =" << std::endl;
-	print_matrix(h_A, nr_rows_A, nr_cols_A);
-	std::cout << "B =" << std::endl;
-	print_matrix(h_B, nr_rows_B, nr_cols_B);
+    // Print matrices
+    std::cout << "Matrix A:" << std::endl;
+    print_matrix(h_A, n, n);
+    std::cout << "Vector B:" << std::endl;
+    print_matrix(h_B, n, 1);
 
-	// Multiply A and B on GPU
-	gpu_blas_mmul(d_A, d_B, d_C, nr_rows_A, nr_cols_A, nr_cols_B);
+    // Solve SLAU Ax = B
+    solve_slae(d_A, d_B, d_X, n, batch_size);
 
-	// Copy (and print) the result on host memory
-	CUDA_CHECK(cudaMemcpy(h_C,d_C,nr_rows_C * nr_cols_C * sizeof(float),cudaMemcpyDeviceToHost));
-	std::cout << "C =" << std::endl;
-	print_matrix(h_C, nr_rows_C, nr_cols_C);
+    // Copy result to host
+    CUDA_CHECK(cudaMemcpy(h_X, d_X, n * sizeof(float), cudaMemcpyDeviceToHost));
 
-	//Free GPU memory
-	CUDA_CHECK(cudaFree(d_A));
-	CUDA_CHECK(cudaFree(d_B));
-	CUDA_CHECK(cudaFree(d_C));	
+    // Print solution
+    std::cout << "Solution X:" << std::endl;
+    print_matrix(h_X, n, 1);
 
-	// Free CPU memory
-	free(h_A);
-	free(h_B);
-	free(h_C);
+    // Free device memory
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_X));
 
-	return 0;
+    // Free host memory
+    free(h_A);
+    free(h_B);
+    free(h_X);
+
+    return 0;
 }
