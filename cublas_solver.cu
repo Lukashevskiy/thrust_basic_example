@@ -25,16 +25,31 @@ void solve_slae(float *d_A, float *d_B, float *d_X, int n, int batch_size) {
 
     int *d_P; // Pivot indices
     int *d_info; // Info array for errors
-    CUDA_CHECK(cudaMalloc(&d_P, n * batch_size * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_info, batch_size * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void **)&d_P, n * batch_size * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void **)&d_info, batch_size * sizeof(int)));
 
     // Perform LU decomposition
-    CUBLAS_CHECK(cublasSgetrfBatched(handle, n, &d_A, n, d_P, d_info, batch_size));
+    float **d_A_array;
+    float **d_B_array;
+    CUDA_CHECK(cudaMalloc((void **)&d_A_array, batch_size * sizeof(float *)));
+    CUDA_CHECK(cudaMalloc((void **)&d_B_array, batch_size * sizeof(float *)));
+
+    // Fill arrays with pointers to batched matrices
+    CUDA_CHECK(cudaMemcpy(d_A_array, &d_A, batch_size * sizeof(float *), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B_array, &d_B, batch_size * sizeof(float *), cudaMemcpyHostToDevice));
+
+    CUBLAS_CHECK(cublasSgetrfBatched(handle, n, d_A_array, n, d_P, d_info, batch_size));
+
+    // Check if LU decomposition succeeded
+    int h_info;
+    CUDA_CHECK(cudaMemcpy(&h_info, d_info, sizeof(int), cudaMemcpyDeviceToHost));
+    if (h_info != 0) {
+        std::cerr << "LU decomposition failed for batch " << h_info << std::endl;
+        return;
+    }
 
     // Solve the system using the LU factorization
-    const float **d_A_array = (const float **)&d_A; // Pointer to array of matrix pointers
-    float **d_B_array = &d_B;
-    CUBLAS_CHECK(cublasSgetrsBatched(handle, CUBLAS_OP_N, n, 1, d_A_array, n, d_P, d_B_array, n, d_info, batch_size));
+    CUBLAS_CHECK(cublasSgetrsBatched(handle, CUBLAS_OP_N, n, 1, (const float **)d_A_array, n, d_P, d_B_array, n, d_info, batch_size));
 
     // Copy result from d_B to d_X
     CUDA_CHECK(cudaMemcpy(d_X, d_B, n * batch_size * sizeof(float), cudaMemcpyDeviceToDevice));
@@ -42,8 +57,11 @@ void solve_slae(float *d_A, float *d_B, float *d_X, int n, int batch_size) {
     // Clean up
     CUDA_CHECK(cudaFree(d_P));
     CUDA_CHECK(cudaFree(d_info));
+    CUDA_CHECK(cudaFree(d_A_array));
+    CUDA_CHECK(cudaFree(d_B_array));
     CUBLAS_CHECK(cublasDestroy(handle));
 }
+
 
 // Print matrix A(nr_rows_A, nr_cols_A) stored in column-major format
 void print_matrix(const float *A, int nr_rows_A, int nr_cols_A) {
