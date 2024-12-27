@@ -1,5 +1,7 @@
 ### monte carlo cpp naiive
 
+l = 2, r = 13
+
 ```
 ---------------------------------------
 Num samples     - 100
