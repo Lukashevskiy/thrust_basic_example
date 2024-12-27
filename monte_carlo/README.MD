@@ -93,5 +93,3 @@ TIME DURATION   - 56916 milliseconds
 --------------------
 
 ```
-
-![img](./image.png)
